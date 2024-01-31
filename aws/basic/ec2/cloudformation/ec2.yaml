@@ -1,0 +1,50 @@
+Parameters:
+  Vpc:
+    Description: "Vpc Id"
+    Type: String
+    Default: "vpc-094d10f69c68d1693"
+  Ami:
+    Description: "Ami EC2 image"
+    Type: String
+    Default: "ami-079db87dc4c10ac91"
+Resources:
+  NewKeyPair:
+    Type: 'AWS::EC2::KeyPair'
+    Properties:
+      KeyName: ec2-test
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+  MyEC2Instance: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: !Ref Ami
+      KeyName: !Ref NewKeyPair
+      InstanceType: t2.micro
+      SecurityGroupIds:
+      - !Ref InstanceSecurityGroup
+      # SecurityGroups:
+      # - !Ref InstanceSecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash -xe
+          sudo dnf update -y
+          sudo dnf install -y httpd
+          sudo systemctl start httpd
+          sudo systemctl enable httpd
+          echo "Hello World from $(hostname -f)" > /var/www/html/index.html
+
+# To retrieve the KeyPair use following commands: 
+# aws ec2 describe-key-pairs --filters Name=key-name,Values=new-key-pair --query KeyPairs[*].KeyPairId --output text 
+# aws ssm get-parameter --name /ec2/keypair/"result of describe-key-pairs command" --with-decryption --query Parameter.Value --output text > new-key-pair.pem

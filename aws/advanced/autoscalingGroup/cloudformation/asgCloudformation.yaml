@@ -1,0 +1,182 @@
+Parameters:
+  CidrBlock:
+    Description: "CidrBlock"
+    Type: String
+    Default: "10.0.0.0/16"
+Resources:
+  myVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CidrBlock
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+       - Key: stack
+         Value: production
+  publicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: "us-east-1a"
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+      - Key: stack
+        Value: production
+  publicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: "us-east-1b"
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+      - Key: stack
+        Value: production
+  privateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: "us-east-1a"
+      Tags:
+      - Key: stack
+        Value: production
+  privateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: "us-east-1b"
+      Tags:
+      - Key: stack
+        Value: production
+  myInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: stack
+        Value: production 
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref myInternetGateway
+      VpcId: !Ref myVPC
+  myInternetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC
+      Tags:
+      - Key: stack
+        Value: production
+  myPublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+       RouteTableId: !Ref myInternetRouteTable
+       DestinationCidrBlock: 0.0.0.0/0
+       GatewayId: !Ref myInternetGateway
+  publicSubnetRouteAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref myInternetRouteTable
+      SubnetId: !Ref publicSubnet1
+  publicSubnetRouteAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref myInternetRouteTable
+      SubnetId: !Ref publicSubnet2
+  ec2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ec2SecurityGroup
+      GroupName: ec2SecurityGroup
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: "-1"
+      Tags: 
+      - Key: stack
+        Value: production
+
+##################################################
+
+  mylb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      Name: asg-lb
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref ec2SecurityGroup
+      Subnets: 
+        - !Ref publicSubnet1
+        - !Ref publicSubnet2
+      Type: application
+
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      IpAddressType: ipv4
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref myVPC
+      Name: MyTargets
+  HTTPlistener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      DefaultActions:
+        - Type: "forward"
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !GetAtt [MyTargetGroup,TargetGroupArn]
+      LoadBalancerArn: !GetAtt [mylb,LoadBalancerArn]
+      Port: 80
+      Protocol: "HTTP"
+  
+  NewKeyPair:
+    Type: 'AWS::EC2::KeyPair'
+    Properties: 
+      KeyName: asg_keypair
+  myLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: asg-launch-template
+      LaunchTemplateData:
+        ImageId: ami-079db87dc4c10ac91
+        InstanceType: t3.micro
+        SecurityGroupIds:
+          - !Ref ec2SecurityGroup
+        KeyName: !Ref NewKeyPair
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash -xe
+            sudo dnf update -y
+            sudo dnf install -y httpd
+            sudo systemctl start httpd
+            sudo systemctl enable httpd
+            echo "Hello World from $(hostname -f)" > /var/www/html/index.html
+  myASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref myLaunchTemplate
+        Version: !GetAtt myLaunchTemplate.LatestVersionNumber
+      MaxSize: '3'
+      MinSize: '1'
+      DesiredCapacity: '2'
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      VPCZoneIdentifier: 
+        - !Ref publicSubnet1
+        - !Ref publicSubnet2
+      TargetGroupARNs:
+        - !GetAtt [MyTargetGroup,TargetGroupArn]
